@@ -1,0 +1,150 @@
+# app_spec.toml - Application Specification v2 for Gitea
+
+name = "gitea-x1"
+version = "1.0.0"
+description = "开源、轻量、自主部署的 Git 源码管理系统"
+image = "sysinner/innerstack-alpine:3.23"
+
+[resources]
+cpu_min = "200m"
+cpu_max = "32"
+memory_min = "256Mi"
+memory_max = "32Gi"
+volume_min = "1Gi"
+volume_max = "1Ti"
+
+[[packages]]
+name = "gitea"
+version = "1.27"
+
+[[service_ports]]
+name = "http"
+port = 3000
+
+[[service_ports]]
+name = "gitssh"
+port = 3022
+
+[[tasks]]
+name = "install"
+run_user = "root"
+on_startup = true
+script = """
+command -v git >/dev/null || apk add --no-cache git
+"""
+
+[[tasks]]
+name = "run"
+depends_on = ["install"]
+cron = "*/60 * * * * *"
+script = """
+PREFIX=/opt/gitea
+NAME=gitea
+
+if pidof ${NAME}; then
+  exit 0
+fi
+
+if [ ! -d "${PREFIX}" ]; then
+  mkdir -p ${PREFIX}
+fi
+
+rsync -av ${ipk.gitea.path}/* ${PREFIX}/
+
+/home/action/.innerstack/inagent config-render --in ${PREFIX}/misc/app.template.ini --out ${PREFIX}/custom/conf/app.ini
+/home/action/.innerstack/inagent config-merge --config ${PREFIX}/custom/conf/app.ini --with-config-field app_ini
+
+${PREFIX}/gitea web >> /home/action/var/log/gitea.log 2>&1 &
+"""
+
+[[tasks]]
+name = "shutdown"
+on_shutdown = true
+script = "killall gitea"
+
+[[configs]]
+name = "app_name"
+title = "应用名称"
+type = "string"
+default = "Gitea"
+
+[[configs]]
+name = "app_ini"
+title = "ini 增量配置"
+type = "text_ini"
+default = """
+;; see https://docs.gitea.com/next/administration/config-cheat-sheet for additional documentation.
+
+APP_NAME = ${self.cfg.app_name}
+RUN_USER = action
+RUN_MODE = prod
+
+[server]
+PROTOCOL = http
+
+; DOMAIN = code.sysinner.cn
+DOMAIN = ${self.net.http.internal_host}
+
+ROOT_URL = %(PROTOCOL)s://${self.net.http.internal_addr}/
+
+HTTP_ADDR = 0.0.0.0
+HTTP_PORT = 3000
+
+REDIRECT_OTHER_PORT = false
+PORT_TO_REDIRECT = 80
+
+START_SSH_SERVER = true
+SSH_LISTEN_HOST = 0.0.0.0
+SSH_LISTEN_PORT = 3022
+
+SSH_PORT = ${self.net.gitssh.internal_port}
+
+SSH_ROOT_PATH = /home/action/.ssh
+
+[database]
+DB_TYPE = sqlite3
+LOG_SQL = false
+
+[security]
+INSTALL_LOCK = true
+LOGIN_REMEMBER_DAYS = 30
+
+[oauth2]
+ENABLED = false
+
+[time]
+DEFAULT_UI_LOCATION = Asia/Shanghai
+
+[log]
+MODE = file
+LEVEL = Info
+;; Sub logger modes, a single comma means use default MODE above, empty means disable it
+logger.router.MODE =
+
+[git]
+MAX_GIT_DIFF_LINES = 2000
+
+[service]
+REQUIRE_SIGNIN_VIEW = true
+ENABLE_CAPTCHA = true
+DEFAULT_KEEP_EMAIL_PRIVATE = true
+DISABLE_REGISTRATION = true
+
+[repository]
+ROOT = /opt/gitea/data/repos
+
+[session]
+PROVIDER = file
+
+[api]
+ENABLE_SWAGGER = false
+
+[i18n]
+LANGS = en-US,zh-CN
+NAMES = English,中文
+
+[other]
+SHOW_FOOTER_BRANDING = false
+SHOW_FOOTER_VERSION = false
+SHOW_FOOTER_TEMPLATE_LOAD_TIME = false
+"""

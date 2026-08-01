@@ -1,0 +1,29 @@
+# ipk.toml - Package Specification v2
+# Incore Package Build Configuration for Gitea
+
+[metadata]
+name        = "gitea"
+version     = "1.27.1"
+authors     = ["gitea.io"]
+description = "A painless self-hosted Git service"
+homepage    = "https://gitea.io"
+license     = "MIT"
+
+[build]
+include = ["misc/app.template.ini"]
+
+script = """
+mkdir -p ${ipk_build_dir}/custom/conf
+mkdir -p ${ipk_build_dir}/data/repos
+mkdir -p ${ipk_build_dir}/var/log
+
+cd ${ipk_dir}/deps
+
+if [ ! -f "gitea-${ipk_version}-linux-amd64" ]; then
+    wget "https://dl.gitea.io/gitea/${ipk_version}/gitea-${ipk_version}-linux-amd64"
+    strip -s gitea-${ipk_version}-linux-amd64
+fi
+
+install gitea-${ipk_version}-linux-amd64 ${ipk_build_dir}/gitea
+chmod +x ${ipk_build_dir}/gitea
+"""
