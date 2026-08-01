@@ -1,0 +1,107 @@
+name = "postgresql-v18"
+description = "PostgreSQL is a powerful, open source object-relational database system"
+image = "sysinner/innerstack-alpine:3.23"
+
+[resources]
+cpu_min = "200m"
+cpu_max = "32"
+memory_min = "256Mi"
+memory_max = "32Gi"
+volume_min = "1Gi"
+volume_max = "1Ti"
+
+[[packages]]
+name = "postgresql-keeper"
+version = "1.0"
+
+# 端口注释
+[[service_ports]]
+port = 5432
+name = "postgresql"
+
+[[tasks]]
+name = "install"
+run_user = "root"
+script = """
+command -v psql >/dev/null || apk add --no-cache postgresql18
+"""
+on_startup = true
+
+[[tasks]]
+name = "run"
+depends_on = ["install"]
+script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18"
+on_startup = true
+
+[[tasks]]
+name = "keepalive"
+depends_on = ["run"]
+script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18"
+cron = "*/10 * * * * *"
+
+[[tasks]]
+name = "shutdown"
+script = "echo quit"
+on_shutdown = true
+
+[[configs]]
+name = "db_name"
+title = "Database Name"
+type = "string"
+default = "dbaction"
+auto_fill = "defval"
+
+[[configs]]
+name = "db_auth"
+title = "Database Password"
+type = "string"
+auto_fill = "hexstr_32"
+
+[[configs]]
+name = "db_user"
+title = "Database User"
+type = "string"
+default = "dbuser"
+auto_fill = "defval"
+
+[[configs]]
+name = "memory_usage_limit"
+title = "Memory Usage In Percentage"
+prompt = "Range in 10 ~ 100"
+type = "string"
+default = "20"
+description = "will allocating 10% ~ 100% Memory Size to this Instance"
+
+# The db_name / db_auth / db_user fields above configure the MAIN database of
+# this instance. The array_group below lets the user declare 1~n ADDITIONAL
+# databases (each with its own name / user / password) to be created alongside
+# the main one. Each entry is uniquely identified by its db_name (the key_item).
+[[configs]]
+name = "databases"
+title = "Additional Databases"
+type = "array_group"
+key_item = "db_name"
+description = "Additional databases to create beyond the main database"
+
+[[configs.items]]
+name = "db_name"
+title = "Database Name"
+type = "string"
+default = "dbaction"
+auto_fill = "defval"
+
+[[configs.items]]
+name = "db_auth"
+title = "Database Password"
+type = "string"
+auto_fill = "hexstr_32"
+
+[[configs.items]]
+name = "db_user"
+title = "Database User"
+type = "string"
+default = ""
+auto_fill = "defval"
+# unique="app" forbids this db_user from duplicating the main db_user above
+# (or the db_user of any other database instance in this array_group).
+unique = "app"
