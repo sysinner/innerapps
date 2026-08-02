@@ -3,7 +3,7 @@
 
 [metadata]
 name = "postgresql-keeper"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["sysinner.com"]
 description = "Configuration management tool for PostgreSQL"
 homepage = "https://www.sysinner.com"

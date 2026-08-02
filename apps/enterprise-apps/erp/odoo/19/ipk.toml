@@ -1,0 +1,42 @@
+# ipk.toml - Package Specification v2
+# Incore Package Build Configuration for Odoo 19 Community Edition
+#
+# 构建期:从官方 nightly 站点下载 Odoo 19 社区版源码 tgz,解压后整体打入 ipk。
+# 运行期(Python 应用)在 app-spec.toml 里通过 install + run 任务拉起。
+
+[metadata]
+name        = "odoo-ce"
+version     = "19.0.20260801"
+authors     = ["odoo.com"]
+description = "Odoo 19 Community Edition — open-source ERP/CRM suite"
+homepage    = "https://www.odoo.com"
+repository  = "https://github.com/odoo/odoo"
+license     = "LGPL-3.0"
+categories  = ["enterprise-apps"]
+
+[build]
+# odoo.template.conf 随包打入,运行前由 inagent config-render 渲染为 odoo.conf
+include = ["odoo.template.conf"]
+
+script = """
+mkdir -p ${ipk_build_dir}
+mkdir -p ${ipk_dir}/deps
+
+cd ${ipk_dir}/deps
+
+# 拉取 Odoo 19 社区版最新 nightly 源码包(https://nightly.odoo.com/19.0/nightly/tgz/)
+if [ ! -f "odoo_${ipk_release_version}.tar.gz" ]; then
+  wget -q "https://nightly.odoo.com/19.0/nightly/tgz/odoo_${ipk_release_version}.tar.gz"
+fi
+
+# 干净解压。setuptools 会把版本归一化为 PEP440(19.0.20260801 -> odoo-19.0.post20260801),
+# 解压出的顶层目录名与 tarball 文件名不一致,故用 glob 动态捕获、避免硬编码。
+rm -rf odoo-*/
+tar zxf odoo_${ipk_release_version}.tar.gz
+SRC_DIR=$(ls -d odoo-*/ | head -n1)
+
+# 将解压目录的内容(含 odoo-bin / requirements.txt / addons / odoo ...)整体放入构建产物根
+rsync -a ${SRC_DIR} ${ipk_build_dir}/
+
+mkdir -p ${ipk_build_dir}/var/log
+"""

@@ -1,0 +1,125 @@
+# app-spec.toml - Application Specification v2 for Odoo 19 Community Edition
+#
+# Long-running Python web app: gitea-style install + run (cron self-heal) +
+# shutdown tasks (not a keeper). DB is a managed postgresql-v18 dependency.
+
+name        = "odoo-ce-19"
+version     = "1.0.1"
+description = "Odoo 19 Community Edition — open-source ERP/CRM suite"
+# Needs Python 3.10+ (debian13 ships 3.13); use the debian runtime image
+image       = "sysinner/innerstack-debian:13"
+
+[resources]
+cpu_min     = "500m"
+cpu_max     = "4"
+memory_min  = "1Gi"
+memory_max  = "8Gi"
+volume_min  = "5Gi"
+volume_max  = "100Gi"
+
+[[packages]]
+# Matches metadata.name in ipk.toml; prefix match hits all 19.x.x
+name    = "odoo-ce"
+version = "19.0"
+
+# Bound at deploy time to an existing postgresql-v18 instance; its connection
+# info is then injected into odoo.conf via template variables.
+[[depends]]
+name = "postgresql-v18"
+
+# Odoo HTTP port; exposed as deps.odoo-ce-19.net.http.*
+[[service_ports]]
+port = 8069
+name = "http"
+
+# ---- Install system dependencies (root, once) ----
+# Keep prose out of `script`: the executor eats newlines around in-script #
+# comments, gluing them onto the next command ("Syntax error").
+# Deps go into system python3.13 (--break-system-packages; no venv). cargo is
+# needed (cryptography==42.0.8 has no cp313 wheel, builds via Rust). wkhtmltopdf
+# is optional (PDF headers/footers); skipped if absent.
+[[tasks]]
+name = "install"
+run_user = "root"
+on_startup = true
+script = """
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y --no-install-recommends python3 python3-pip python3-dev build-essential libldap2-dev libpq-dev libsasl2-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev libfreetype6-dev liblcms2-dev libwebp-dev libffi-dev libssl-dev libmagic1 fonts-liberation node-less rsync wget ca-certificates procps cargo
+apt-get install -y --no-install-recommends wkhtmltopdf || true
+"""
+
+# ---- Run (cron self-heal: every 60s, start if down, skip if up) ----
+# Steps (in TOML comments, not in `script`, for the same newline reason):
+#   1. Self-heal gate: exit 0 if odoo is already running.
+#   2. rsync the read-only package into a writable run dir.
+#   3. Render base config + layer user ini; fail if db_host is still a
+#      placeholder/missing (postgresql-v18 unbound). Check db_host's value only —
+#      grepping the whole file for '${' false-positives on literal ${ in comments.
+#   4. Install Python deps (aliyun mirror); .deps_installed skips re-resolve.
+#   5. Launch via `python3 -m odoo` (no standalone odoo-bin).
+#   6. `-i base` installs base on first connect; idempotent after.
+[[tasks]]
+name = "run"
+depends_on = ["install"]
+cron = "*/60 * * * * *"
+script = """
+PREFIX=/opt/odoo/odoo-ce
+PIDFILE=/opt/odoo/odoo-ce/odoo.pid
+
+if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+  exit 0
+fi
+
+mkdir -p /opt/odoo/odoo-ce /opt/odoo/data /opt/odoo/var/log
+
+rsync -a ${ipk.odoo_ce.path}/ $PREFIX/
+
+/home/action/.innerstack/inagent config-render --in $PREFIX/odoo.template.conf --out $PREFIX/odoo.conf
+
+if ! grep -Eq '^[[:space:]]*db_host[[:space:]]*=[[:space:]]*[^[:space:]$]' "$PREFIX/odoo.conf"; then
+  echo "FATAL: db_host not rendered in odoo.conf (postgresql-v18 dependency likely unbound)" >&2
+  cat "$PREFIX/odoo.conf" >&2
+  exit 1
+fi
+
+/home/action/.innerstack/inagent config-merge --config $PREFIX/odoo.conf --with-config-field odoo_conf
+
+if [ ! -f "$PREFIX/.deps_installed" ]; then
+  # pip3 install --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ --upgrade setuptools wheel
+  # pip3 install --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ -r "$PREFIX/requirements.txt"
+  pip3 install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple/ --upgrade setuptools wheel
+  pip3 install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple/ -r "$PREFIX/requirements.txt"
+  touch "$PREFIX/.deps_installed"
+fi
+
+cd $PREFIX
+nohup python3 -m odoo --config $PREFIX/odoo.conf -i base >> /opt/odoo/var/log/odoo.log 2>&1 &
+echo $! > $PIDFILE
+"""
+
+# ---- Shutdown ----
+[[tasks]]
+name = "shutdown"
+on_shutdown = true
+script = """
+if [ -f /opt/odoo/odoo-ce/odoo.pid ]; then
+  kill "$(cat /opt/odoo/odoo-ce/odoo.pid)" 2>/dev/null || true
+  rm -f /opt/odoo/odoo-ce/odoo.pid
+fi
+"""
+
+# ---- User-overridable Odoo ini (db_* are injected; do not edit here) ----
+[[configs]]
+name        = "odoo_conf"
+title       = "odoo.conf overrides"
+type        = "text_ini"
+description = "Override/append [options] items (e.g. workers, proxy_mode, log_level, limit_*). db_* are injected from the postgresql dependency — do not edit."
+default = """
+[options]
+; e.g. worker count in multiprocessing mode (0 = threaded)
+;workers = 0
+;max_cron_threads = 2
+;proxy_mode = True
+;log_level = info
+"""

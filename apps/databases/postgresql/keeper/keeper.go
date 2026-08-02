@@ -382,7 +382,7 @@ func initConf() error {
 
 	if mgr, err := NewConfigFileManager(pgVerPath("data/postgresql.conf")); err == nil {
 		mgr.Update(map[string]string{
-			"unix_socket_directories": pgVerPath(""),
+			"unix_socket_directories": "/tmp", // pgVerPath(""),
 			"listen_addresses":        "*",
 			"port":                    "5432",
 			"password_encryption":     "scram-sha-256",
