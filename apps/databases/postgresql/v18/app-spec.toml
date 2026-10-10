@@ -4,9 +4,9 @@ description = "PostgreSQL is a powerful, open source object-relational database 
 image = "sysinner/innerstack-alpine:3.23"
 
 [resources]
-cpu_min = "200m"
+cpu_min = "100m"
 cpu_max = "32"
-memory_min = "256Mi"
+memory_min = "128Mi"
 memory_max = "32Gi"
 volume_min = "1Gi"
 volume_max = "1Ti"
@@ -31,13 +31,13 @@ on_startup = true
 [[tasks]]
 name = "run"
 depends_on = ["install"]
-script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18"
+script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18 > /opt/postgresql/keeper/var/log/pgkeeper.log"
 on_startup = true
 
 [[tasks]]
 name = "keepalive"
 depends_on = ["run"]
-script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18"
+script = "/usr/innerstack/postgresql-keeper/bin/keeper --major_version 18 > /opt/postgresql/keeper/var/log/pgkeeper.log"
 cron = "*/10 * * * * *"
 
 [[tasks]]

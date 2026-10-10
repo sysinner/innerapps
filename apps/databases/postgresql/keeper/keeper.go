@@ -15,11 +15,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -56,6 +56,16 @@ func pgVerPath(path string) string {
 func pgPrefix() string {
 	return "/opt/postgresql/postgresql" + pgVer
 }
+
+// pgSocketDir is the unix-socket directory postgres listens on (configured as
+// unix_socket_directories in postgresql.conf) and the directory every client
+// tool (createuser/createdb/psql) connects through via -h. The two MUST agree:
+// the tools open "<pgSocketDir>/.s.PGSQL.5432", so a mismatch surfaces as
+// "connection to server on socket ... failed: No such file or directory".
+// /tmp is used rather than the data dir so the path already matches the
+// running server without forcing a restart, since unix_socket_directories is
+// not reloadable.
+const pgSocketDir = "/tmp"
 
 type EnvConfig struct {
 	Inited    bool                `json:"inited"`
@@ -157,7 +167,11 @@ func main() {
 		if err := os.MkdirAll(pgKeeperPath("var/log"), 0755); err != nil {
 			panic(err)
 		}
-		fp, err := os.OpenFile(pgKeeperPath("var/log/pgkeeper.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		fp, err := os.OpenFile(
+			pgKeeperPath("var/log/pgkeeper.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+			0666,
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -304,7 +318,11 @@ func do() {
 
 	//
 	if cfgLast.Database.Name == "" {
-		if err := jsonDecodeFromFile(pgVerPath("init_option.json"), &cfgLast); err != nil && !os.IsNotExist(err) {
+		if err := jsonDecodeFromFile(
+			pgVerPath("init_option.json"),
+			&cfgLast,
+		); err != nil &&
+			!os.IsNotExist(err) {
 			slog.Error("load init_option.json err " + err.Error())
 			return
 		}
@@ -382,7 +400,7 @@ func initConf() error {
 
 	if mgr, err := NewConfigFileManager(pgVerPath("data/postgresql.conf")); err == nil {
 		mgr.Update(map[string]string{
-			"unix_socket_directories": "/tmp", // pgVerPath(""),
+			"unix_socket_directories": pgSocketDir,
 			"listen_addresses":        "*",
 			"port":                    "5432",
 			"password_encryption":     "scram-sha-256",
@@ -432,7 +450,7 @@ func initDataDir() error {
 
 	_, err := os.Stat(pgVerPath("data/postgresql.conf"))
 	if err != nil && os.IsNotExist(err) {
-		_, err = exec.Command("/usr/bin/initdb", "-D", pgVerPath("data")).Output()
+		_, err = runCmd(120*time.Second, "/usr/bin/initdb", "-D", pgVerPath("data"))
 		if err != nil {
 			slog.Error("initdb", "err", err.Error())
 		} else {
@@ -468,9 +486,9 @@ func start() error {
 
 	cleanRunlock()
 	os.Chmod(pgVerPath("data"), 0700)
-	out, err := exec.Command(("/usr/bin/pg_ctl"),
+	out, err := runCmd(90*time.Second, "/usr/bin/pg_ctl",
 		"-D", pgVerPath("data"),
-		"-l", pgVerPath("server_logfile.log"), "start").Output()
+		"-l", pgVerPath("server_logfile.log"), "start")
 
 	time.Sleep(1e9)
 
@@ -496,9 +514,9 @@ func restart() error {
 
 	if pid := pidof(); pid > 0 {
 		slog.Info("reloa", "pid", pid)
-		_, err = exec.Command("/usr/bin/pg_ctl",
+		_, err = runCmd(30*time.Second, "/usr/bin/pg_ctl",
 			"-D", pgVerPath("data"),
-			"-l", pgVerPath("server_logfile.log"), "reload").Output()
+			"-l", pgVerPath("server_logfile.log"), "reload")
 		if err != nil {
 			slog.Error("reload err " + err.Error())
 		} else {
@@ -507,9 +525,9 @@ func restart() error {
 	} else {
 		cleanRunlock()
 		os.Chmod(pgVerPath("data"), 0700)
-		_, err = exec.Command("/usr/bin/pg_ctl",
+		_, err = runCmd(90*time.Second, "/usr/bin/pg_ctl",
 			"-D", pgVerPath("data"),
-			"-l", pgVerPath("server_logfile.log"), "start").Output()
+			"-l", pgVerPath("server_logfile.log"), "start")
 		time.Sleep(1e9)
 		if err != nil {
 			slog.Error("start postgres", "err", err.Error())
@@ -526,8 +544,8 @@ func pidof() int {
 	//
 	for i := 0; i < 3; i++ {
 
-		output, err := exec.Command("/usr/bin/pg_ctl",
-			"-D", pgVerPath("data"), "status").CombinedOutput()
+		output, err := runCmd(10*time.Second, "/usr/bin/pg_ctl",
+			"-D", pgVerPath("data"), "status")
 		if err == nil {
 			re := regexp.MustCompile(`PID: (\[?(\d+)\]?)`)
 			match := re.FindStringSubmatch(string(output))
@@ -560,11 +578,11 @@ func initDB() error {
 	if cfgNext.Database.Name != "" &&
 		cfgLast.Database.Name == "" {
 
-		exec.Command("/usr/bin/createuser", "-h", pgVerPath(""), "-D", "dbuser").Output()
+		runCmd(15*time.Second, "/usr/bin/createuser", "-h", pgSocketDir, "-D", "dbuser")
 
-		_, err = exec.Command("/usr/bin/createdb",
-			"-h", pgVerPath(""),
-			"--owner=dbuser", cfgNext.Database.Name).Output()
+		_, err = runCmd(15*time.Second, "/usr/bin/createdb",
+			"-h", pgSocketDir,
+			"--owner=dbuser", cfgNext.Database.Name)
 		if err != nil {
 			slog.Error("initdb", "err", err.Error())
 			return err
@@ -600,7 +618,11 @@ func initUser() error {
 			}
 
 			cfgLast.UserSync(v)
-			if err := jsonEncodeToFileIndent(pgVerPath("init_option.json"), cfgLast, 0644); err != nil {
+			if err := jsonEncodeToFileIndent(
+				pgVerPath("init_option.json"),
+				cfgLast,
+				0644,
+			); err != nil {
 				return err
 			}
 		}
@@ -638,8 +660,8 @@ func initDatabases() error {
 
 		// ensure the owner role exists (tolerate "role already exists")
 		if db.Owner != "" {
-			if out, err := exec.Command("/usr/bin/createuser",
-				"-h", pgVerPath(""), db.Owner).CombinedOutput(); err != nil {
+			if out, err := runCmd(15*time.Second, "/usr/bin/createuser",
+				"-h", pgSocketDir, db.Owner); err != nil {
 				if !pgAlreadyExists(out) {
 					slog.Error("createuser", "name", db.Owner,
 						"err", err.Error(), "output", string(out))
@@ -649,12 +671,12 @@ func initDatabases() error {
 		}
 
 		// create the database, owned by the role if declared
-		args := []string{"-h", pgVerPath("")}
+		args := []string{"-h", pgSocketDir}
 		if db.Owner != "" {
 			args = append(args, "--owner="+db.Owner)
 		}
 		args = append(args, db.Name)
-		if out, err := exec.Command("/usr/bin/createdb", args...).CombinedOutput(); err != nil {
+		if out, err := runCmd(15*time.Second, "/usr/bin/createdb", args...); err != nil {
 			if !pgAlreadyExists(out) {
 				slog.Error("createdb", "name", db.Name,
 					"err", err.Error(), "output", string(out))
@@ -679,30 +701,18 @@ func initDatabases() error {
 	return nil
 }
 
-// pgSetPassword sets/updates a postgres role's password by piping an ALTER USER
-// statement through psql over the local unix socket.
+// pgSetPassword sets/updates a postgres role's password by running an ALTER
+// USER statement through psql over the local unix socket, bounded by a timeout
+// so a wedged psql cannot pin the keeper.
 func pgSetPassword(user, auth, dbname string) error {
-
-	cmd := exec.Command("/bin/sh")
-	stdin, err := cmd.StdinPipe()
+	stmt := fmt.Sprintf("ALTER USER %s PASSWORD '%s'", user, auth)
+	out, err := runCmd(15*time.Second, "/usr/bin/psql",
+		"-h", pgSocketDir, "-U", user, "-d", dbname, "-c", stmt)
 	if err != nil {
-		return err
-	}
-
-	cmdStr := fmt.Sprintf("/usr/bin/psql -h %s -U %s -d %s -c \"ALTER USER %s PASSWORD '%s'\"",
-		pgVerPath(""), user, dbname, user, auth)
-
-	go func() {
-		defer stdin.Close()
-		io.WriteString(stdin, cmdStr)
-	}()
-
-	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Error("set user password", "user", user,
-			"err", err.Error(), "cmd", cmdStr, "output", string(out))
+			"err", err.Error(), "output", string(out))
 		return err
 	}
-
 	slog.Info("set user password", "user", user)
 	return nil
 }
@@ -711,6 +721,25 @@ func pgSetPassword(user, auth, dbname string) error {
 // object already exists, so a benign re-run does not fail the whole step.
 func pgAlreadyExists(out []byte) bool {
 	return strings.Contains(string(out), "already exists")
+}
+
+// runCmd runs name with args, returning combined stdout+stderr, bounded by
+// timeout. Every postgres client/server tool call goes through here so a wedged
+// child (a client blocked on an unresponsive socket, or pg_ctl waiting on a
+// server that never comes up) can never pin the keeper and stall the keepalive
+// task. On timeout the child is killed and the error is context.DeadlineExceeded.
+//
+// WaitDelay is the second safeguard: pg_ctl start spawns postgres as a
+// long-lived grandchild that inherits and keeps open the stdout/stderr pipes,
+// which would otherwise block CombinedOutput forever even after pg_ctl exits
+// (CommandContext only kills the direct child). WaitDelay force-closes those
+// pipes shortly after the child exits, bounding the wait.
+func runCmd(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 5 * time.Second
+	return cmd.CombinedOutput()
 }
 
 // ConfigFileManager manages PostgreSQL configuration file content,
@@ -861,9 +890,22 @@ func (m *HbaFileManager) Update(target HbaRecord, newMethod string) {
 		if isMatch {
 			// construct new line with updated method
 			if target.Type == "local" {
-				lines[i] = fmt.Sprintf("%-10s %-10s %-10s %-10s", fields[0], fields[1], fields[2], newMethod)
+				lines[i] = fmt.Sprintf(
+					"%-10s %-10s %-10s %-10s",
+					fields[0],
+					fields[1],
+					fields[2],
+					newMethod,
+				)
 			} else {
-				lines[i] = fmt.Sprintf("%-10s %-10s %-10s %-20s %-10s", fields[0], fields[1], fields[2], fields[3], newMethod)
+				lines[i] = fmt.Sprintf(
+					"%-10s %-10s %-10s %-20s %-10s",
+					fields[0],
+					fields[1],
+					fields[2],
+					fields[3],
+					newMethod,
+				)
 			}
 			found = true
 		}
@@ -873,9 +915,22 @@ func (m *HbaFileManager) Update(target HbaRecord, newMethod string) {
 	if !found {
 		var newLine string
 		if target.Type == "local" {
-			newLine = fmt.Sprintf("%-10s %-10s %-10s %-10s", target.Type, target.Database, target.User, newMethod)
+			newLine = fmt.Sprintf(
+				"%-10s %-10s %-10s %-10s",
+				target.Type,
+				target.Database,
+				target.User,
+				newMethod,
+			)
 		} else {
-			newLine = fmt.Sprintf("%-10s %-10s %-10s %-20s %-10s", target.Type, target.Database, target.User, target.Address, newMethod)
+			newLine = fmt.Sprintf(
+				"%-10s %-10s %-10s %-20s %-10s",
+				target.Type,
+				target.Database,
+				target.User,
+				target.Address,
+				newMethod,
+			)
 		}
 		lines = append(lines, newLine)
 	}

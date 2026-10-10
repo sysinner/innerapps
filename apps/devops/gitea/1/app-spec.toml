@@ -15,7 +15,7 @@ volume_max = "1Ti"
 
 [[packages]]
 name = "gitea"
-version = "1.27"
+version = "28"
 
 [[service_ports]]
 name = "http"
