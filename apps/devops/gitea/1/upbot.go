@@ -7,8 +7,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"regexp"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -112,7 +112,7 @@ func main() {
 			pkgname := fmt.Sprintf("gitea_%s_%s_%s.ipk", ver.String(), v[0], v[1])
 			if _, err := os.Stat(pkgname); err != nil && os.IsNotExist(err) {
 				args := []string{
-					"pkg-build",
+					"pkg", "build",
 					"--os", v[0],
 					"--arch", v[1],
 					"--version", ver.String(),
@@ -120,24 +120,24 @@ func main() {
 				fmt.Println("innerstack start : innerstack " + strings.Join(args, " "))
 				out, err := exec.Command("innerstack", args...).Output()
 				if err != nil {
-					fmt.Println("innerstack pkg-build fail", err, string(out))
+					fmt.Println("innerstack pkg build fail", err, string(out))
 					continue
 				}
-				fmt.Println("innerstack pkg-build done : ", pkgname)
+				fmt.Println("innerstack pkg build done : ", pkgname)
 			}
 			args := []string{
-				"pkg-push",
+				"pkg", "push",
 				pkgname,
 			}
 			fmt.Println("innerstack", args)
 			continue
 			out, err := exec.Command("innerstack", args...).Output()
 			if err != nil {
-				fmt.Println("innerstack pkg-push fail", err, string(out))
+				fmt.Println("innerstack pkg push fail", err, string(out))
 				continue
 			}
 
-			fmt.Println("innerstack pkg-push done : ", pkgname)
+			fmt.Println("innerstack pkg push done : ", pkgname)
 		}
 	}
 }
