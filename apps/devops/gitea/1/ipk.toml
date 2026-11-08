@@ -3,7 +3,7 @@
 
 [metadata]
 name        = "gitea"
-version     = "28.2.0"
+version     = "28.3.0"
 authors     = ["gitea.io"]
 description = "A painless self-hosted Git service"
 homepage    = "https://gitea.io"
