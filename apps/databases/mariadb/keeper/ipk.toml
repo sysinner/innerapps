@@ -1,0 +1,16 @@
+# ipk.toml - Package Specification v2
+# InnerStack Package Build Configuration
+
+[metadata]
+name = "mariadb-keeper"
+version = "1.0.0"
+authors = ["sysinner.com"]
+description = "Configuration management tool for MariaDB"
+homepage = "https://www.sysinner.com"
+license = "Apache-2.0"
+
+[build]
+script = """
+mkdir -p ${ipk_build_dir}/bin
+CGO_ENABLED=0 GOOS=${ipk_release_os} GOARCH=${ipk_release_arch} go build -a -trimpath -ldflags "-w -s" -o ${ipk_build_dir}/bin/keeper keeper.go
+"""

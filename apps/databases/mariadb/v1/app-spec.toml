@@ -1,0 +1,134 @@
+name = "mariadb-v1"
+version = "1.0.0"
+description = "MariaDB is one of the most popular open source relational databases, forked from MySQL"
+image = "sysinner/innerstack-alpine:3.23"
+
+[resources]
+cpu_min = "100m"
+cpu_max = "32"
+memory_min = "128Mi"
+memory_max = "32Gi"
+volume_min = "1Gi"
+volume_max = "1Ti"
+
+[[packages]]
+name = "mariadb-keeper"
+version = "1.0"
+
+[[service_ports]]
+port = 3306
+name = "mariadb"
+
+# Alpine's mariadb package is not major-versioned (unlike postgresql18): it
+# tracks the series shipped by the pinned base image (3.23 ships the 11.4
+# LTS; upstream latest stable is 12.x). The keeper detects the installed
+# major, scopes datadir / my.cnf under /opt/mariadb/mariadb<major>/ and
+# stamps the major into init_option.json, so an image refresh that drifts
+# the series fails with an explicit migration message instead of silently
+# opening (or re-bootstrapping beside) another major's data. Moving this
+# app to 12 is an in-place field edit here (image pin to a base image
+# carrying mariadb 12), not a new generation dir.
+[[tasks]]
+name = "install"
+run_user = "root"
+script = """
+command -v mariadbd >/dev/null || apk add --no-cache mariadb mariadb-client
+"""
+on_startup = true
+
+# The keeper is a short-lived process: it reconciles the instance once
+# (bootstrap datadir, render my.cnf, start/stop mariadbd, provision
+# databases and users) and exits. The log directory is created before the
+# redirect so the very first run on a fresh volume cannot fail on a missing
+# path.
+[[tasks]]
+name = "run"
+depends_on = ["install"]
+script = """
+mkdir -p /opt/mariadb/keeper/var/log
+/usr/innerstack/mariadb-keeper/bin/keeper >> /opt/mariadb/keeper/var/log/keeper.log 2>&1
+"""
+on_startup = true
+
+[[tasks]]
+name = "keepalive"
+depends_on = ["run"]
+script = """
+/usr/innerstack/mariadb-keeper/bin/keeper >> /opt/mariadb/keeper/var/log/keeper.log 2>&1
+"""
+cron = "*/10 * * * * *"
+
+# Graceful InnoDB shutdown on instance teardown, delegated to the keeper so
+# the admin binary path, socket and auth model live in one place instead of
+# being re-implemented in shell. Best-effort: the keeper logs errors but
+# exits clean, so teardown is never blocked (falls through when the server
+# is not running).
+[[tasks]]
+name = "shutdown"
+script = """
+mkdir -p /opt/mariadb/keeper/var/log
+/usr/innerstack/mariadb-keeper/bin/keeper --shutdown >> /opt/mariadb/keeper/var/log/keeper.log 2>&1
+"""
+on_shutdown = true
+
+[[configs]]
+name = "db_name"
+title = "Database Name"
+type = "string"
+default = "dbaction"
+auto_fill = "defval"
+
+[[configs]]
+name = "db_auth"
+title = "Database Password"
+type = "string"
+auto_fill = "hexstr_32"
+
+[[configs]]
+name = "db_user"
+title = "Database User"
+type = "string"
+default = "dbuser"
+auto_fill = "defval"
+
+[[configs]]
+name = "memory_usage_limit"
+title = "Memory Usage In Percentage"
+prompt = "Range in 10 ~ 100"
+type = "string"
+default = "20"
+description = "will allocating 10% ~ 100% Memory Size to this Instance"
+
+# The db_name / db_auth / db_user fields above configure the MAIN database of
+# this instance. The array_group below lets the user declare 1~n ADDITIONAL
+# databases (each with its own name / user / password) to be created alongside
+# the main one. Each entry is uniquely identified by its db_name (the key_item).
+[[configs]]
+name = "databases"
+title = "Additional Databases"
+type = "array_group"
+key_item = "db_name"
+description = "Additional databases to create beyond the main database"
+
+[[configs.items]]
+name = "db_name"
+title = "Database Name"
+type = "string"
+default = "dbaction"
+auto_fill = "defval"
+
+[[configs.items]]
+name = "db_auth"
+title = "Database Password"
+type = "string"
+auto_fill = "hexstr_32"
+
+[[configs.items]]
+name = "db_user"
+title = "Database User"
+type = "string"
+default = ""
+auto_fill = "defval"
+# unique="app" forbids this db_user from duplicating the main db_user above
+# (or the db_user of any other database instance in this array_group).
+unique = "app"
